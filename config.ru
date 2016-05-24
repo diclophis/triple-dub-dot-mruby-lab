@@ -1,18 +1,34 @@
 # this sorta is a web-server
 
+begin
+
 @tty = UV::TTY.new(1, 1)
-@tty.set_mode(0)
-@tty.reset_mode
-winsize = @tty.get_winsize
+#@tty.set_mode(0)
+#@tty.reset_mode
+#winsize = @tty.get_winsize
 
 def puts(*args)
   @tty.write(args.join(" ") + "\n")
 end
 
+rescue => e
+  def puts(*args)
+  end
+end
+
 puts ARGV.inspect
 
 s = UV::TCP.new
-s.bind(UV::ip4_addr('0.0.0.0', (ARGV[0] && ARGV[0].to_i) || 8888))
+
+if UV::Signal.const_defined?(:SIGINT)
+  puts :wtf
+  UV::Signal.new.start(UV::Signal::SIGINT) do
+    puts :interupted
+    UV.default_loop.stop
+  end
+end
+
+s.bind(UV.ip4_addr('0.0.0.0', (ARGV[0] && ARGV[0].to_i) || 8888))
 
 puts "bound to #{s.getsockname}"
 
@@ -43,4 +59,4 @@ s.listen(5) { |x|
       }
 }
 
-UV::run()
+UV.run
