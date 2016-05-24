@@ -44,6 +44,9 @@ s.listen(5) { |x|
       c.read_start { |b|
             ss += b.to_s
             offset = phr.parse_request(ss)
+
+puts offset
+
             if offset.is_a?(Fixnum)
               puts :method, offset, phr.method.inspect
               puts phr.path.inspect
