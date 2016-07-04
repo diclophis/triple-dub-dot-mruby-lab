@@ -1,5 +1,5 @@
 def hterm
-a=<<HTERM_EOF
+a = <<HTERM_EOF
 Ly8gVGhpcyBmaWxlIHdhcyBnZW5lcmF0
 ZWQgYnkgbGliZG90L2Jpbi9jb25jYXQu
 c2guCi8vIEl0IGhhcyBiZWVuIG1hcmtl

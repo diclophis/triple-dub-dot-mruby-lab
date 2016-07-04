@@ -6,13 +6,7 @@ UV.disable_stdio_inheritance
 
 begin
 
-
-
 @tty = UV::TTY.new(1, 1)
-#@tty.set_mode(0)
-#@tty.reset_mode
-#winsize = @tty.get_winsize
-
 
 def puts(*args)
   @tty.write(args.join(" ") + "\n")
@@ -28,7 +22,6 @@ puts ARGV.inspect
 s = UV::TCP.new
 
 if UV::Signal.const_defined?(:SIGINT)
-  puts :wtf
   UV::Signal.new.start(UV::Signal::SIGINT) do
     puts :interupted
     UV.default_loop.stop
@@ -52,15 +45,20 @@ var Rutty = function(argv, terminal) {
     this.io.terminal_.reset(); //TODO: resume, needs to keep some buffer
   }.bind(this);
   this.source.onmessage = function(event) {
+    console.log("onmessage", event.data);
+
     var msg = JSON.parse(event.data);
 
     if (msg.raw && msg.raw.length > 0) { // see: https://github.com/flori/json for discussion on `to_json_raw_object`
       var decoded = '';
       for (var i=0; i<msg.raw.length; i++) {
-        //NOTE: what is the difference here?
-        decoded += String.fromCodePoint(msg.raw[i]); // & 0xff ??
-        //decoded += String.fromCharCode(msg.raw[i]); // & 0xff ??
+      //  //NOTE: what is the difference here?
+        decoded += String.fromCodePoint(msg.raw[i]);
+      //    decoded += String.fromCharCode(msg.raw[i]); // & 0xff ??
       }
+      console.log(decoded);
+
+      //var decoded = msg.raw;
 
       this.io.writeUTF16(decoded);
     }
@@ -191,17 +189,20 @@ EOJS
 end
 
 def index
-  "<html>" +
-    "<head>" +
-      "<link rel='icon' href='data:;base64,iVBORw0KGgo='>" +
-      "<style>html, body { background: black; margin: 0; padding: 0; }</style>" +
-      "<script src='hterm'></script>" +
-    "</head>" +
-    "<body>" +
-      "<form id='terminal' action='/terminal' data-socket='init' data-console='init'/>" +
-      "<script>#{rutty}</script>" +
-    "</body>" +
-  "</html>"
+@index ||= <<EOJS
+  <!DOCTYPE html>
+  <html>
+    <head>
+      <link rel='icon' href='data:;base64,iVBORw0KGgo='>
+      <style>html, body { background: black; margin: 0; padding: 0; }</style>
+      <script>#{hterm}</script>
+    </head>
+    <body>
+      <form id='terminal' action='/terminal' data-socket='init' data-console='init'/>
+      <script>#{rutty}</script>
+    </body>
+  </html>
+EOJS
 end
 
 s.bind(UV.ip4_addr('0.0.0.0', (ARGV[0] && ARGV[0].to_i) || 8888))
@@ -212,6 +213,7 @@ s.listen(5) { |x|
   return if x != 0
 
   c = s.accept
+
   puts "connected (peer: #{c.getpeername})"
 
   phr = Phr.new
@@ -225,57 +227,74 @@ s.listen(5) { |x|
     offset = phr.parse_request(ss)
 
     if offset.is_a?(Fixnum)
-
       case phr.path
         when "/"
-          puts "index"
+          puts "/"
+
           response = index
 
-          c.write("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n#{response}")
-          c.close
+          c.write("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: #{response.length}\r\nConnection: close\r\n\r\n#{response}")
 
-        when "/hterm"
-          puts "/hterm"
-          response = hterm
-
-          c.write("HTTP/1.1 200 OK\r\nContent-Type: text/javascript\r\nContent-Length: #{response.length}\r\nConnection: close\r\n\r\n")
-          
-          response.each_char do |chr|
-            c.write(chr)
-          end
-
-          c.close
+          c.shutdown
 
         when "/terminal?socket=init"
-          c.write("HTTP/1.1 200 OK\r\nConnection: keep-alive\r\nContent-Type: text/event-stream\r\n\r\nretry: 15000\r\n\r\n")
+          puts "/terminal?socket=init"
 
-          ps = UV::Process.new({
-            'file' => '/usr/local/bin/htop',
-            'args' => [] 
-          })
+          c.write("HTTP/1.1 200 OK\r\nConnection: keep-alive\r\nContent-Type: text/event-stream\r\n\r\nretry: 99999\r\n\r\n")
 
-          other_tty = UV::TTY.new(0, 1)
-          other_tty.set_mode(0)
-          winsize = other_tty.get_winsize
-          puts winsize
+          @other_tty ||= nil
 
-          ps.stdin_pipe = UV::Pipe.new(0).open(other_tty.fileno) #(1)
-          ps.stdout_pipe = UV::Pipe.new(0)
+          @ps ||= begin
+            ps = UV::Process.new({
+              'file' => '/bin/bash',
+              'args' => ['-i', '-l'] 
+            })
 
-          ps.spawn do |sig|
-            puts "exit #{sig}"
-            c.close
+            @other_tty = UV::TTY.new(1, 1)
+            @other_tty.set_mode(0)
+
+            ps.stdin_pipe = UV::Pipe.new(0).open(@other_tty.fileno)
+            ps.stdout_pipe = UV::Pipe.new(0)
+            ps.stderr_pipe = UV::Pipe.new(0)
+
+            ps.spawn do |sig|
+              puts "exit #{sig}"
+            end
+
+            ps
           end
 
-          ps.stdout_pipe.read_start do |b|
-            c.write("data: #{{'raw' => b.codepoints}.to_json}\r\n\r\n")
+          @ps.stderr_pipe.read_start do |b|
+            puts b.inspect
           end
 
-          ps.kill(0)
+          @ps.stdout_pipe.read_start do |b|
+            begin
+              if b
+                c.write("data: " + {'raw' => b.codepoints.reject { |c| c > 64 }}.to_json + "\r\n\r\n")
+              end
+            rescue UVError => uv_error
+              puts uv_error.inspect
+              c.shutdown
+            end
+          end
+
+          @ps.kill(0)
 
         when "/terminal/resize"
+          puts "/terminal/resize"
+
           c.write("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
-          c.close
+          c.shutdown
+
+        when "/terminal/stdin"
+          puts "/terminal/stdin"
+
+          c.write("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
+          c.shutdown
+
+          puts phr.inspect
+          puts ss[offset..-1]
 
       else
         puts :method, offset, phr.method.inspect
@@ -284,28 +303,9 @@ s.listen(5) { |x|
         puts phr.headers.inspect
       end
 
-=begin
-      ps = UV::Process.new({
-        'file' => 'htop',
-        'args' => [] 
-      })
-      ps.stdin_pipe = UV::Pipe.new(0)
-      ps.stdout_pipe = UV::Pipe.new(0)
-
-      ps.spawn do |sig|
-        puts "exit #{sig}"
-      end
-
-      ps.stdout_pipe.read_start do |b|
-        puts b
-      end
-
-      #c.write("Content-Type: text/plain\r\n\r\nOK")
-      #c.close
-=end
     elsif offset == :parser_error
       puts :closed
-      c.close
+      c.shutdown
     end
   }
 }
