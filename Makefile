@@ -12,9 +12,10 @@ static_ruby_headers = $(patsubst %,$(build)/%, $(patsubst lib/%.rb,%.h, $(wildca
 .SECONDARY: $(static_ruby_headers) $(objects)
 objects += $(mruby_static_lib)
 
-LDFLAGS=-lm -lpthread -lrt -ldl $(shell (uname | grep -q Darwin || echo -static) )
+LDFLAGS=-lm -lpthread -ldl $(shell (uname | grep -q Darwin || echo -static) )
 
 CFLAGS=-std=c99 -Imruby/include -I$(build)
+
 #-I~/opt/include
 
 $(shell mkdir -p $(build))
