@@ -4,26 +4,29 @@
 
 UV.disable_stdio_inheritance
 
-begin
+#@tty = UV::TTY.new(1, 0)
 
-@tty = UV::TTY.new(1, 1)
-
-def puts(*args)
-  @tty.write(args.join(" ") + "\n")
-end
-
+=begin
 rescue => e
   def puts(*args)
   end
+=end
+
+@stdin_out = UV::Pipe.new(0).open(0)
+@stdout_out = UV::Pipe.new(0).open(1)
+@stderr_out = UV::Pipe.new(0).open(2)
+
+def sputs(*args)
+  @stdout_out.write(args.join)
 end
 
-puts ARGV.inspect
+sputs ARGV.inspect
 
 s = UV::TCP.new
 
 if UV::Signal.const_defined?(:SIGINT)
   UV::Signal.new.start(UV::Signal::SIGINT) do
-    puts :interupted
+    sputs :interupted
     UV.default_loop.stop
   end
 end
@@ -36,32 +39,34 @@ var Rutty = function(argv, terminal) {
   this.consoleUid = terminal.dataset.console;
   this.argv_ = argv;
   this.io = null;
+  this.term = null;
   this.sendingSweep = null;
   this.pendingString = [];
   this.sendingResize = null;
   this.pendingResize = [];
   this.source = new EventSource(this.terminalForm.action + '?socket=' + this.socket); //TODO: fix socket params passing, put in session somehow
   this.source.onopen = function(event) {
-    this.io.terminal_.reset(); //TODO: resume, needs to keep some buffer
+    console.log("nopen");
   }.bind(this);
+
   this.source.onmessage = function(event) {
-    console.log("onmessage", event.data);
+    //console.log("onmessage", event.data);
 
     var msg = JSON.parse(event.data);
 
     if (msg.raw && msg.raw.length > 0) { // see: https://github.com/flori/json for discussion on `to_json_raw_object`
-      var decoded = '';
       for (var i=0; i<msg.raw.length; i++) {
-      //  //NOTE: what is the difference here?
-        decoded += String.fromCodePoint(msg.raw[i]);
-      //    decoded += String.fromCharCode(msg.raw[i]); // & 0xff ??
+        var decoded = String.fromCodePoint(msg.raw[i]);
+        console.log(decoded, decoded.codePointAt(0));
+        this.io.writeUTF16(decoded);
       }
-      console.log(decoded);
-
-      //var decoded = msg.raw;
-
-      this.io.writeUTF16(decoded);
     }
+
+    //this.io.terminal_.reset(); //TODO: resume, needs to keep some buffer
+    //this.io.terminal_.setWidth(80);
+    //this.io.terminal_.setHeight(20);
+    //this.io.terminal_.reset(); //TODO: resume, needs to keep some buffer
+
   }.bind(this);
   this.source.onerror = function(e) {
     this.source.close();
@@ -101,12 +106,13 @@ Rutty.prototype.sendString_ = function(str) {
       this.connected = false;
     }.bind(this);
 
-    var formData = new FormData();
-    var in_d = JSON.stringify({data: str});
-    formData.append('in', in_d);
-    formData.append('socket', this.socket);
+    //var formData = new FormData();
+    var in_d = JSON.stringify({raw: str});
+    //formData.append('in', in_d);
+    //formData.append('socket', this.socket);
     oReq.open('POST', this.terminalForm.action + '/stdin', true);
-    oReq.send(formData);
+    oReq.send(in_d);
+    console.log("sent");
   } else {
     this.pendingString.push(str);
   }
@@ -158,11 +164,13 @@ var initTerminal = function(terminalElement) {
       term = new hterm.Terminal();
       term.decorate(terminalElement);
 
-      term.setWidth(20);
-      term.setHeight(10);
+      term.reset();
+      term.setWidth(80);
+      term.setHeight(20);
 
       term.setCursorPosition(0, 0);
       term.setCursorVisible(true);
+
       term.prefs_.set('ctrl-c-copy', true);
       term.prefs_.set('use-default-window-copy', true);
 
@@ -176,6 +184,7 @@ var initTerminal = function(terminalElement) {
         term.screenSize.width,
         term.screenSize.height
       );
+
     });
   }
 };
@@ -207,14 +216,14 @@ end
 
 s.bind(UV.ip4_addr('0.0.0.0', (ARGV[0] && ARGV[0].to_i) || 8888))
 
-puts "bound to #{s.getsockname}"
+sputs "bound to #{s.getsockname}"
 
 s.listen(5) { |x|
   return if x != 0
 
   c = s.accept
 
-  puts "connected (peer: #{c.getpeername})"
+  # puts "connected (peer: #{c.getpeername})"
 
   phr = Phr.new
 
@@ -222,14 +231,15 @@ s.listen(5) { |x|
 
   c.read_start { |b|
 
-    ss += b.to_s
+    bb = b.to_s
+    ss += bb
 
     offset = phr.parse_request(ss)
 
-    if offset.is_a?(Fixnum)
+    if offset.is_a?(Fixnum) && bb.length != 0
       case phr.path
         when "/"
-          puts "/"
+          # puts "/"
 
           response = index
 
@@ -238,43 +248,57 @@ s.listen(5) { |x|
           c.shutdown
 
         when "/terminal?socket=init"
-          puts "/terminal?socket=init"
+          # puts "/terminal?socket=init"
 
           c.write("HTTP/1.1 200 OK\r\nConnection: keep-alive\r\nContent-Type: text/event-stream\r\n\r\nretry: 99999\r\n\r\n")
 
-          @other_tty ||= nil
+          #@other_tty ||= nil
 
-          @ps ||= begin
+          @ps = begin
             ps = UV::Process.new({
-              'file' => '/bin/bash',
-              'args' => ['-i', '-l'] 
+              'file' => 'htop',
+              'args' => [] 
             })
 
-            @other_tty = UV::TTY.new(1, 1)
-            @other_tty.set_mode(0)
+#other_tty = UV::TTY.new(0, 1)
+#sputs other_tty.get_winsize
 
-            ps.stdin_pipe = UV::Pipe.new(0).open(@other_tty.fileno)
-            ps.stdout_pipe = UV::Pipe.new(0)
-            ps.stderr_pipe = UV::Pipe.new(0)
+#other_tty.set_mode(4)
+
+#sputs other_tty.fileno
+
+          #@other_tty.read_start do |b|
+          #  sputs b.inspect
+          #end
+
+#@other_tty = UV::Pipe.new(1).open(other_tty.fileno)
+
+@other_tty = UV::Pipe.new(0)
+@other_err = UV::Pipe.new(0)
+
+            ps.stdin_pipe = @other_tty #UV::Pipe.new(1).open(@other_tty.fileno)
+            ps.stdout_pipe = @other_tty #UV::Pipe.new(0)
+            ps.stderr_pipe = @other_err #UV::Pipe.new(0)
 
             ps.spawn do |sig|
-              puts "exit #{sig}"
+              sputs "exit #{sig}"
             end
 
             ps
           end
 
           @ps.stderr_pipe.read_start do |b|
-            puts b.inspect
+            sputs b
           end
 
-          @ps.stdout_pipe.read_start do |b|
+          @ps.stdout_pipe.read_start do |bout|
             begin
-              if b
-                c.write("data: " + {'raw' => b.codepoints.reject { |c| c > 64 }}.to_json + "\r\n\r\n")
+              if bout
+                sputs bout
+                c.write("data: " + {'raw' => bout.codepoints}.to_json + "\n\n")
               end
             rescue UVError => uv_error
-              puts uv_error.inspect
+              # puts uv_error.inspect
               c.shutdown
             end
           end
@@ -282,32 +306,78 @@ s.listen(5) { |x|
           @ps.kill(0)
 
         when "/terminal/resize"
-          puts "/terminal/resize"
+          #puts "/terminal/resize"
 
           c.write("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
           c.shutdown
 
         when "/terminal/stdin"
-          puts "/terminal/stdin"
+          #puts "/terminal/stdin #{offset} #{bb.length}"
 
           c.write("HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n")
           c.shutdown
 
-          puts phr.inspect
-          puts ss[offset..-1]
+          begin
+            # puts ss[offset..-1]
+            input = JSON.parse(ss[offset..-1])
+            if input["raw"]
+              #@other_tty.write(input["raw"])
+              #@ps.stdin_pipe.write(input["raw"])
+            end
+          rescue JSON::ParserError => json_error
+          end
 
       else
-        puts :method, offset, phr.method.inspect
-        puts phr.path.inspect
-        puts phr.minor_version.inspect
-        puts phr.headers.inspect
+        #puts :method, offset, phr.method.inspect
+        #puts phr.path.inspect
+        #puts phr.minor_version.inspect
+        #puts phr.headers.inspect
       end
 
     elsif offset == :parser_error
-      puts :closed
+      # puts :closed
       c.shutdown
     end
   }
 }
 
 UV.run
+
+          #puts phr.headers.inspect
+          #puts MultipartParser::Reader.inspect
+
+          #puts 
+          #valid_content_type = "multipart/form-data; boundary=9asdadsdfv"
+=begin
+          content_type = phr.headers.detect { |k, v| k == "content-type" }
+
+          boundary = MultipartParser::Reader.extract_boundary_value(content_type[1])
+
+          puts boundary
+
+          reader = MultipartParser::Reader.new(boundary)
+
+          on_error_called = false
+
+          parts = {}
+
+          reader.on_error do |err|
+            on_error_called = true
+          end
+
+          reader.on_part do |part|
+            part_entry = {:part => part, :data => '', :ended => false}
+            parts[part.name] = part_entry
+            part.on_data do |data|
+              part_entry[:data] << data
+            end
+            part.on_end do
+              part_entry[:ended] = true
+            end
+          end
+
+          reader.write(ss[offset..-1])
+
+          #puts phr.inspect
+          puts parts.inspect
+=end

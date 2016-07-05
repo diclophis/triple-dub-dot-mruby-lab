@@ -13,6 +13,8 @@
 
 
 #include "hterm.h"
+#include "multipart_parser.h"
+#include "multipart_reader.h"
 
 
 static void if_exception_error_and_exit(mrb_state* mrb, char *context) {
@@ -75,7 +77,7 @@ int main(int argc, char** argv) {
 
   mrb_define_global_const(mrb, "ARGV", args);
 
-  eval_static_libs(mrb, hterm, NULL);
+  eval_static_libs(mrb, hterm, multipart_parser, multipart_reader, NULL);
 
   mrbc_context *detective_file = mrbc_context_new(mrb);
   mrbc_filename(mrb, detective_file, config);
